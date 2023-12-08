@@ -202,8 +202,21 @@ for(date in range) {
   print(e-s)
   write.csv(pbp,"C:/Users/tdmed/OneDrive/pbp_raw.csv", row.names = FALSE, na='')
 
+  # pbp <- read.csv("C:/Users/tdmed/OneDrive/pbp_raw.csv")
   
-  
+  positions_ <- c('to p','to c', 'to 1b','to 2b','to 3b','to ss','to lf','to cf','to rf','to dh', 'to pr', 'pinch run', 'pinch ran', 'pinch hit')
+  positions <- paste(positions_, collapse = "|")
+  hit_second <- '2B'
+  hit_third <- '3B'
+  hr <- 'HR'
+  # ways to reach first
+  reach_first <- "1B|BB|IBB|HBP|FC|CI|K-WP|K-PB|reached first on E|reached second on E|Dropped foul ball, E3struck out looking|placed on first|place on first|reached first"
+  # ways to reach second
+  reach_second <- "2B|advanced to second|stole second|placed on second|place on second"
+  # ways to reach third
+  reach_third <-"3B|advanced to third|stole third"
+  # combined
+  reach_all <- paste0(reach_first,"|",reach_second,"|",reach_third)
   
   pbp_ <- pbp %>% distinct()  %>%
     filter(Batter != 'na') %>%
@@ -385,6 +398,7 @@ for(date in range) {
     mutate(test = ifelse(InningPA == max(InningPA) & Result == 'Out', 0.00, RE_end - RE + RunsonPlay)) %>%
     relocate(Result, .after = Event)
   
+  # wOBA weights ====
   weights <- pbp_2 %>%
     group_by(Result) %>%
     summarise(sum = sum(RE_diff, na.rm = TRUE),
@@ -394,34 +408,77 @@ for(date in range) {
       Result = factor(Result, levels = c('BB', 'HBP', '1B', '2B', '3B', 'HR', 'Out')),
       weight = sum / n,
       new_weight = weight + abs(weight[Result == 'Out']),
-      scaled_weights = new_weight * 1.36) %>%
-    arrange(Result) %>%
+      scaled_weights = new_weight * 1.096096) %>%
+    arrange(Result) 
+  
+  
+  # Scrape Team Stats in order to scale wOBA to OBP -----
+  url_h <- read_html("https://frontierleague.com/sports/bsb/2022-23/teams?sort=avg&r=0&pos=h")  %>% 
+    html_table(fill = TRUE)
+  
+  fl_h <- url_h[[1]] %>% full_join(url_h[[2]], by = c('Name' = 'Name')) %>%
+    rename_all(toupper) %>%
+    select(-c(`RK.Y`, `GP.Y`)) %>%
+    mutate(`1B` = H - `2B` - `3B` - HR,.after = H) %>%
+    mutate(NAME = 'LEAGUE', .before = 1) %>%
+    group_by(NAME) %>%
+    summarise(across(c(3:27), sum)) %>%
+    mutate(AVG = H/AB,
+           OBP = (H+BB+HBP)/PA,
+           SLG = TB/AB,
+           wOBA_nonscaled = ( (BB*weights$new_weight[weights$Result == 'BB']) + (HBP*weights$new_weight[weights$Result == 'HBP']) +
+             (`1B` * weights$new_weight[weights$Result == '1B']) + (`2B` * weights$new_weight[weights$Result == '2B']) +
+             (`3B` * weights$new_weight[weights$Result == '3B']) + (`HR` * weights$new_weight[weights$Result == 'HR']) ) /
+             PA,
+           wOBA_scale = OBP / wOBA_nonscaled,
+           wOBA_final = wOBA_nonscaled * wOBA_scale
+           )
+  
+  
+  fl_p <- url_h[[3]]  %>%
+    rename_all(toupper) %>%
+    select(-RK) %>%
+    mutate(IP = floor(IP) + ceiling((IP - floor(IP)) * 3) / 3,
+           Outs = floor(IP) * 3 + ceiling((IP - floor(IP)) * 3)) %>%
+    mutate(NAME = 'LEAGUE', .before = 1) %>%
+    group_by(NAME) %>%
+    summarise(across(c(1:12), sum)) %>%
+    mutate(ERA = R / IP * 9,
+           WHIP = (BB+H)/IP,
+           `K/9` = K / IP * 9,
+           W = GP/2)
+  
+  #fl_std <- 
+    
+  # wOBA WEIGHTS FINAL ----
+
+  weights_ <- weights %>%
     select(Result, scaled_weights) %>%
     pivot_wider(names_from = Result, values_from = scaled_weights) %>%
     select(-Out) %>%
     rename_all(~ paste0("w", .)) %>%
     mutate(season = 2023,
-           lg_woba = 0.354271,
-           woba_scale = 1.35726535, .before = wBB) %>%
+           lg_woba = fl_h$wOBA_final,
+           woba_scale = fl_h$wOBA_scale, .before = wBB) %>%
     mutate(runSB = 0.2,
-           runCS = -0.343935353,
-           lg_r_pa = 0.139830794,
-           lg_r_w = 11.48344089,
+           runCS =  -(2 * (fl_p$R/fl_p$Outs) + .075),
+           lg_r_pa = fl_h$R/fl_h$PA,
+           lg_r_w =  fl_p$R/fl_p$W,
            cFIP = 3.60333886)
   e <- now()
   print(e-s)
 }
 
-  write.csv(weights, "C:/Users/tdmed/OneDrive/_Shiny/_Coop2/weights.csv", row.names = F)
+  write.csv(weights_, "C:/Users/tdmed/OneDrive/_Shiny/_Coop2/weights.csv", row.names = F)
   write.csv(run_matrix, "C:/Users/tdmed/OneDrive/_Shiny/_Coop2/run_matrix.csv", row.names = F)
   write.csv(pbp_2, "C:/Users/tdmed/OneDrive/pbp_23_final.csv", row.names = F)
 
   wb <- createWorkbook()
   addWorksheet(wb, 1)
-  writeData(wb, 1, weights)
+  writeData(wb, 1, weights_)
   addWorksheet(wb, 2)
   writeData(wb, 2, run_matrix)
   
-  saveWorkbook(wb, "C:/Users/tdmed/OneDrive/_Shiny/_Coop2/FL_weights_run_matrix.xlsx")
+  saveWorkbook(wb, "C:/Users/tdmed/OneDrive/_Shiny/_Coop2/FL_weights_run_matrix.xlsx", overwrite = T)
   
 
