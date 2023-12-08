@@ -11,12 +11,26 @@
   library(discordr)
   library(emojifont)
   library(tidyverse)
+  library(svMisc)
 
 }
 
 # define start date of season to scrape.
 start_date <- '2023-05-11'
-
+# define substitutions that we will later filter out of out play by play data
+positions_ <- c('to p','to c', 'to 1b','to 2b','to 3b','to ss','to lf','to cf','to rf','to dh', 'to pr', 'pinch run', 'pinch ran', 'pinch hit')
+positions <- paste(positions_, collapse = "|")
+hit_second <- '2B'
+hit_third <- '3B'
+hr <- 'HR'
+# ways to reach first
+reach_first <- "1B|BB|IBB|HBP|FC|CI|K-WP|K-PB|reached first on E|reached second on E|Dropped foul ball, E3struck out looking|placed on first|place on first|reached first"
+# ways to reach second
+reach_second <- "2B|advanced to second|stole second|placed on second|place on second"
+# ways to reach third
+reach_third <-"3B|advanced to third|stole third"
+# combined
+reach_all <- paste0(reach_first,"|",reach_second,"|",reach_third)
 
 # url of webpage where boxscores are located
 url <- "https://www.frontierleague.com/composite?d="
@@ -36,7 +50,7 @@ game_dates <- unique(links[grepl('/composite\\?d=2023',links)])
 # generating range of dates from the game_dates urls, removes everything before the = 
 range <- gsub(".*=","",game_dates)
 
-# empty create empty df for daily log, gamelog, and pbp
+# empty create empty df for daily log, gamelog, and pbp, game_data
 dailylog <- data.frame()
 dailylog2 <- data.frame()
 pbp <- data.frame()
@@ -44,6 +58,8 @@ game_data <- data.frame(Date = character(),
                         HomeTeam = character(),
                         Umpire = character(),
                         stringsAsFactors = FALSE)
+
+
 
 {
   # s variable is just the time the scrape begins. I like to see how long all my loops/scrapes take so i also have an e at the end to compare
@@ -63,8 +79,7 @@ for(date in range) {
   if (length(boxscores > 0)) {
     
     # for future use: might filter out these strings
-    positions_ <- c('to p','to c', 'to 1b','to 2b','to 3b','to ss','to lf','to cf','to rf','to dh', 'to pr', 'pinch run', 'pinch ran', 'pinch hit')
-    positions <- paste(positions_, collapse = "|")
+ 
     
     # for each box score on that date
     for (bs in boxscores) {
@@ -110,8 +125,9 @@ for(date in range) {
                      # extract the inning number from the scrape
                      Inning = as.numeric(str_squish(gsub('Inning|of|st|nd|rd|th','',Inning)))[1],
                      Team = str_squish(Team)[1],
-                     Batter = str_squish(str_to_lower(word(sapply(str_extract_all(Event, "\\b\\w+\\b"),
-                                                                 function(x) paste(x[1:2], collapse = " ")), 2))),
+                     # Batter = str_squish(str_to_lower(word(sapply(str_extract_all(Event, "\\b\\w+\\b"),
+                     #                                             function(x) paste(x[1:2], collapse = " ")), 2))),
+                     Batter = word(Event, start = 1, end = 2),
                      Event = str_replace(Event, "^[^ ]* ", ""),
                      Runs =  str_count(Event, "homered") + str_count(Event, "scored"),
                      Game = bs)  %>%
@@ -143,9 +159,7 @@ for(date in range) {
               
             } else {
               
-              # inning <- inning %>%
-              #   mutate(PAofGame = row_number() + nrow(gamelog))
-              
+           
               gamelog <- rbind(gamelog, inning) %>%
                 distinct(.keep_all = TRUE) %>%
                 mutate(PAofGame = cumsum(Batter != lag(Batter, default = first(Batter))) + 1) %>%
@@ -175,41 +189,29 @@ for(date in range) {
              Team = str_to_title(Team)) %>%
       rename(GamePA = 'PAofGame')
     
-    # 
-    # boxs<-read.csv("C:/Users/tdmed/OneDrive/_Shiny/szn box up to 6-7.csv")
-    # boxs2 <- boxs%>%
-    # #  filter(Date !='2023-06-07') %>%
-    #   distinct()%>%
-    #   distinct(Game) %>%
-    #   mutate(GameID = row_number()) %>%
-    #   left_join(boxs, by = "Game") %>%
-    #   select(-Game) %>% 
-    #   mutate(Team = str_squish(Team),
-    #          Batter = str_to_lower(Batter),
-    #          Team = str_to_title(Team)) %>%
-    #   rename(GamePA = 'PAofGame') %>%
-    #   arrange(GameID, GamePA)
-    
     pbp <-  rbind(pbp, dailylog2) %>% distinct()
   } else {"No games yesterday"}
   #rm(boxs2)
   
-  #write.csv(boxs2,"C:/Users/tdmed/OneDrive/_Shiny/Daily boxscore update.csv", row.names = FALSE, na='')
+  index <- which(range == date)
+  print(paste("Scraped game", index, "of", length(range)))
   
   #send_webhook_message(paste(emoji('white_check_mark'),"Boxscores successfully scraped!"))
 } 
-  
-  paste(positions_,"for")
-  grepl(paste(paste(positions_,"for"), collapse = "|"),Event)
+  e<- now()
+  print(e-s)
+  write.csv(pbp,"C:/Users/tdmed/OneDrive/pbp_raw.csv", row.names = FALSE, na='')
+
   
   
   
   pbp_ <- pbp %>% distinct()  %>%
     filter(Batter != 'na') %>%
-    # filter(!grepl(paste( paste(positions_,"for"), collapse = "|"),Event),
-    #        !grepl(paste0(positions_,"\\.$", collapse = "|"), Event)) 
-    rename(RunsonPlay = 'Runs',
-           InningPA = 'PAofInning') %>%
+    rename(InningPA = 'PAofInning',
+           RunsonPlay = 'Runs') %>%
+    
+    mutate(Batter = str_to_title(Batter),
+           Event = mapply(function(event, batter) sub("^\\w+", batter, event), Event, Batter))%>%
     mutate(Event = str_replace_all(Event, c(
       'homered' = 'HR', 'tripled' = '3B', 'doubled' = '2B', 'singled' = '1B',
       'intentionally walked' = 'IBB', 'walked' = 'BB', 'hit by pitch' = 'HBP',
@@ -230,8 +232,6 @@ for(date in range) {
                    paste(Batter, Event), Event),
     Batter = ifelse(grepl('stole|advanced to second on a wild pitch|advanced to third on a wild pitch|caught stealing|advanced to second on E c|advanced to third on E c', Event) &
                       !grepl('K-WP|K-PB', Event), lead(Batter), Batter),
-    # GamePA = rleid(GameID, Date, Inning, Team, Top.Bottom, Batter),
-    # InningPA = rleid(GameID, Date, Inning, Team, Top.Bottom, Batter, .after = GamePA),
     Result = case_when(
       grepl('HR', Event) ~ 'HR',
       grepl('3B', Event) ~ '3B',
@@ -239,7 +239,7 @@ for(date in range) {
       grepl('1B', Event) ~ '1B',
       grepl('BB', Event) ~ 'BB',
       grepl('HBP', Event) ~ 'HBP',
-      grepl('E|error', Event) ~ 'E',
+      grepl('reached on error|on E', Event) & !grepl('1B|2B|3B|HR|FC', Event) ~ 'E',
       grepl('FC', Event) ~ 'FC',
       grepl('IBB', Event) ~ 'IBB',
       grepl('CI', Event) ~ 'CI',
@@ -249,72 +249,116 @@ for(date in range) {
       grepl('passed ball', Event) ~ 'PB',
       grepl('balk|illegal pitch', Event) ~ 'BK',
       grepl("K-WP|K-PB|struck out|grounded out|flied out|popped up|lined out|popped out|double play|triple play|fouled out|out at first|infield fly|batter's interference", Event) ~ 'Out',
-      grepl(paste( paste(positions_,"for"), collapse = "|"),Event) ~ "SUB",
+      grepl(paste(positions_,"for", collapse = "|"), Event) ~ "SUB",
       grepl(paste0(positions_,"\\.$", collapse = "|"), Event) ~ "PosChange",
       grepl("place on second|placed on first|placed on second|place on first", Event) ~ "XInn_Runner",
       grepl('Failed pickoff attempt',Event ) ~ "POA",
-            TRUE ~ NA_character_
-            )
-      ) %>%
+      TRUE ~ NA_character_
+    )
+    ) %>%
     mutate(Result = case_when(
       is.na(Result) & grepl('out at', Event) ~ 'Out_on_bases', 
       is.na(Result) & grepl('scored', Event) ~ 'Run_on_bases', 
       is.na(Result) & str_count(Event, "\\S+") == 3 & word(Event, 1) == 'for' ~ "SUB" ,
       is.na(Result) & grepl('advanced to second|advanced to third', Event) ~ 'Runner_adv',
       is.na(Result) & grepl("for", Event) ~ "SUB",
-      TRUE ~ Result) # CHANGE THIS 
-         ) %>% 
-    mutate(R1 = NA, 
-           R2 = NA, 
-           R3 = NA,
-           OutsonPlay = ifelse(grepl(' out', Event) & !grepl('K-WP|K-PB', Event), 1,
-                               ifelse(grepl('double play', Event), 2,
-                                      ifelse(grepl('triple play', Event), 3, 0))) ) %>%
-    filter(!Result %in% c('XInn_Runner', 'SUB'))  %>%
+      TRUE ~ Result),
+      Batter = ifelse(Result %in% c('Run_on_bases', 'Runner_adv'), lead(Batter), Batter)
+    ) %>%
+    filter(!Result %in% c('SUB','Xinn_Runner', 'POA', 'PosChange')) %>% 
     group_by(Date, GameID, Top.Bottom, Inning, Team) %>%
-    mutate(InningPA = cumsum(Batter != lag(Batter, default = first(Batter))) + 1) %>%
+    mutate(InningPA =  cumsum(Batter != lag(Batter, default = first(Batter))) + 1 ) %>%
     ungroup() %>% group_by(Date, GameID) %>%
     mutate(GamePA = cumsum(Batter != lag(Batter, default = first(Batter))) + 1)  %>%
-    ungroup() %>%
-    mutate(across(c('R1', 'R2', 'R3'), ~ ifelse(InningPA == 1, 0, .)),
-         #  across(c('R1_end', 'R2_end', 'R3_end'), ~ ifelse(InningPA == 1, 0, .)),
-           Outs = ifelse(InningPA == 1, 0, NA), .after = Event) %>%
-    mutate(R1 = ifelse(lag(grepl("1B|BB|IBB|HBP|FC|CI|K-WP|K-PB|reached first on E|reached second on E|Dropped foul ball, E3struck out looking|placed on first|place on first",
-                                 Event), default = FALSE), 1, R1),
-           R2 = ifelse(lag(grepl("2B|advanced to second|stole second|placed on second|place on second", Event), default = FALSE), 2, R2),
-           R3 = ifelse(lag(grepl("3B|advanced to third|stole third", Event), default = FALSE), 3, R3),
-           across(c('R1', 'R2', 'R3'), ~ ifelse(lag(grepl('HR', Event), default = FALSE), 0, .)),
-           
-    ) %>%
-    mutate(across(c('R1', 'R2', 'R3'), ~ ifelse(is.na(.) & lag(!grepl('advanced|stole', Event), default = FALSE), lag(., default = FALSE), .)),
-           R1 = ifelse(lag(grepl("2B|3B", Event), default = FALSE), 0, R1),
-           R2 = ifelse(lag(grepl("3B", Event), default = FALSE), 0, R2),
-           R1 = ifelse(lag(grepl("out at second c to", Event), default = FALSE) &
-                         lag(grepl("caught stealing", Event), default = FALSE), 0, R1),
-           R2 = ifelse(lag(grepl("out at third c to", Event), default = FALSE) &
-                         lag(grepl("caught stealing", Event), default = FALSE), 0, R2),
-    ) %>%
-    group_by(Date, GameID, Inning, Top.Bottom) %>%
+    ungroup()  %>% 
+    
+    
+    group_by(Date, GameID, Top.Bottom, Inning) %>%
+    mutate(
+      OutsonPlay = ifelse(grepl(' out', Event) & !grepl('K-WP|K-PB', Event), 1,
+                          ifelse(grepl('double play', Event), 2,
+                                 ifelse(grepl('triple play', Event), 3, 0))),
+      Outs = ifelse(InningPA == 1, 0, NA),
+      R1=NA, R2=NA,R3=NA,
+      across(c(R1, R2, R3), ~ifelse(InningPA == 1, 0, .)),
+      R1_end= NA,
+      R2_end= NA,
+      R3_end= NA,
+      R1_end = case_when(
+        grepl(reach_first, Event) == T ~ 1,
+        grepl(reach_first, Event) == F & InningPA == 1 ~ 0,
+        grepl(reach_first, Event) == FALSE & InningPA != 1 ~ ifelse(is.na(lag(R1_end)), NA, lag(R1_end)),
+      ),
+      R2_end = case_when(
+        grepl(reach_second, Event) == T ~ 2,
+        grepl(reach_second, Event) == F & InningPA == 1 ~ 0,
+        grepl(reach_second, Event) == FALSE & InningPA != 1 ~ ifelse(is.na(lag(R2_end)), NA, lag(R2_end)), 
+        grepl(reach_second, Event) == FALSE & !is.na(lag(R2_end)) ~ ifelse(is.na(lag(R2_end)), NA, lag(R2_end)),
+        
+      ),
+      R3_end =  case_when(
+        grepl(reach_third, Event) == T ~ 3,
+        grepl(reach_third, Event) == F & InningPA == 1 ~ 0,
+        grepl(reach_third, Event) == F & InningPA != 1 ~ ifelse(is.na(lag(R3_end)), 0, lag(R3_end)),
+      ),
+      across(c(R1_end, R2_end, R3_end), ~ifelse(grepl(hr, Event), 0, .)),
+      across(c(R1_end, R2_end, R3_end), ~ifelse(grepl('struck out|popped up|flied out|lined out', Event) & !grepl('advanced', Event), lag(.), .)),
+      across(c(R1_end, R2_end, R3_end), ~ifelse(grepl('struck out|popped up|flied out|lined out', Event) & !grepl('advanced', Event), lag(.), .)),
+      across(c(R1_end, R2_end), ~ifelse(grepl(hit_third, Event), 0, .)),
+      across(c(R1_end), ~ifelse((grepl('2B|WP|SB', Event)), 0, .)),
+      across(c(R1_end, R2_end, R3_end), ~ifelse(grepl('sacrifice fly', Event) & !grepl('advanced', Event), lag(.), .)),
+      across(c(R3_end), ~ifelse(grepl('sacrifice fly', Event) & grepl('scored', Event), 0, .)),
+      across(c(R2_end, R3_end), ~ifelse(lag(R1_end) == 0 & grepl(reach_first, Event) & !grepl("advanced|scored", Event), lag(.), .)),
+      across(c(R2_end, R3_end), ~ifelse(lag(R1_end) == 0 & grepl(reach_first, Event) & !grepl("advanced|scored", Event), lag(.), .)),
+      across(c(R3_end), ~ifelse(grepl('sacrifice fly', Event) & grepl('scored', Event), 0, .)),
+      R1_end = ifelse(InningPA == 1 & !grepl(reach_first, Event), 0, R1_end),
+      R2_end = ifelse(InningPA == 1 & !grepl(reach_second, Event), 0, R2_end),
+      R3_end = ifelse(InningPA == 1 & !grepl(reach_third, Event), 0, R3_end),
+      across(c(R1_end, R2_end, R3_end), ~ifelse(InningPA == 1 & !grepl(reach_all, Event), 0, .)),
+      R1_end = ifelse(grepl('BB, advanced to second', Event), 0, R1_end),
+      R2_end = ifelse(grepl('BB, advanced to second', Event), 2, R2_end),
+      R3_end = ifelse(grepl('BB, advanced to third', Event), 3, R3_end),
+      R3_end = ifelse(lengths(strsplit(Event, ' ')) == 3 & word(Event,-1) == 'scored.', 0, R3_end),
+      R2_end = ifelse(lengths(strsplit(Event, ' ')) == 3 & word(Event,-1) == 'scored.', lag(R2_end), R2_end),
+      R2_end = ifelse(is.na(R2_end) & grepl(reach_second, Event), 2, R2_end),
+      R3_end = ifelse(is.na(R3_end) & grepl(reach_second, Event), 3, R3_end),
+      across(c(R1_end, R2_end, R3_end), ~ifelse(grepl('struck out|popped up|flied out|lined out|fouled out|infield fly', Event) & !grepl('advanced', Event) & InningPA != 1, lag(.), .)),
+      across(c(R1_end, R2_end, R3_end), ~ifelse(grepl('struck out|popped up|flied out|lined out|fouled out|infield fly', Event) & !grepl('advanced', Event) & InningPA != 1, lag(.), .)),
+      across(c(R1_end), ~ifelse(grepl('struck out|popped up|flied out|lined out|fouled out|infield fly|grounded out', Event) & !grepl('advanced to second', Event) & InningPA != 1, lag(.), .)),
+      across(c(R2_end), ~ifelse(grepl('struck out|popped up|flied out|lined out|fouled out|infield fly|grounded out', Event) & !grepl('advanced to third', Event) & InningPA != 1, lag(.), .)),
+      across(c(R3_end), ~ifelse(grepl('sacrifice fly', Event) & grepl('scored', Event), 0, .)),
+      across(c(R1_end, R2_end, R3_end), ~ifelse(InningPA == max(InningPA) & grepl('out', Event), 0, .)),
+      R1_end = ifelse(grepl('1B|grounded out', Event) & lag(R1_end) == 0 & lag(R2_end) == 0 & R3_end == 0 & grepl('advanced to second|advanced to third', Event), 0, R1_end),
+      R2_end = ifelse(grepl('1B|grounded out', Event) & lag(R1_end) == 0 & lag(R2_end) == 0 & R3_end == 0 & grepl('advanced to second', Event), 2, R2_end),
+      R3_end = ifelse(grepl('1B|grounded out', Event) & lag(R1_end) == 0 & lag(R2_end) == 0 & R3_end == 0 & grepl('advanced to third', Event), 3, R3_end),
+      R2_end = ifelse(grepl('2B|grounded out', Event) & lag(R1_end) == 0 & lag(R2_end) == 0 & R3_end == 0 & grepl('advanced to second', Event), 2, R2_end),
+      R3_end = ifelse(grepl('2B|grounded out', Event) & lag(R1_end) == 0 & lag(R2_end) == 0 & R3_end == 0 & grepl('advanced to third', Event), 3, R3_end),
+      across(c(R1_end, R2_end, R3_end), ~ifelse(is.na(.), 0, .)),
+      R1 = ifelse(InningPA != 1, lag(R1_end), R1),
+      R2 = ifelse(InningPA != 1, lag(R2_end), R2),
+      R3 = ifelse(InningPA != 1, lag(R3_end), R3),
+      R1 = ifelse(Inning == 11 & InningPA == 1, 1, R1),
+      R2 = ifelse(Inning == 10 & InningPA == 1, 2, R2),
+      
+      .after = R3) %>%
+    # group_by(Date, GameID, Inning, Top.Bottom) %>%
     mutate(TotalRunsInning = sum(RunsonPlay),
            Runs_upto = lag(cumsum(RunsonPlay)),
            Runs_upto = ifelse(is.na(Runs_upto), 0, Runs_upto),
            Outs = lag(cumsum(OutsonPlay)),
-           Outs = ifelse(is.na(Outs), 0, Outs),
-           across(c('R1', 'R2', 'R3'), ~ ifelse(is.na(.), 0, .))
-    ) %>%
-    ungroup()  %>%
+           Outs = ifelse(is.na(Outs), 0, Outs)
+    ) %>% 
+    ungroup() %>%   # TO EXCEL FOR FUTHER REVIEW write.csv(pbp_, "C:/Users/tdmed/OneDrive/pbp_review.csv", row.names = F)
+
+    mutate(Runners = paste0(R1,R2,R3),
+           Runners_end = paste0(R1_end,R2_end,R3_end),
+           .after = Event) %>%
+    select(-c(R1,R2,R3,R1_end,R2_end,R3_end)) %>%
+    mutate(GameUUID = paste0(GameID,'.',GamePA))
   
-  # TO EXCEL FOR FUTHER REVIEW
- # write.csv(pbp_, "C:/Users/tdmed/OneDrive/pbp_review balks.csv", row.names = F)
-  
-    mutate(Runners = paste0(R1, R2, R3)) %>%
-    dplyr::select(Date, GameID, GamePA, InningPA, Top.Bottom, Inning, Team, Batter, Event, Result, Runners, OutsonPlay, RunsonPlay, Outs, Runs_upto, TotalRunsInning, )
-  
-  
-  # Create run_matrix
   run_matrix <- pbp_ %>%
     group_by(Outs, Runners) %>%
-    summarise(RE = round(mean(TotalRunsInning - RunsonPlay), 3)) %>%
+    summarise(RE = round(mean(TotalRunsInning - Runs_upto), 3)) %>%
     mutate(Runners = factor(Runners, levels = c('000', '100', '020', '120', '003', '103', '023', '123'))) %>%
     arrange(Runners) %>%
     pivot_wider(names_from = Outs, values_from = RE)
@@ -322,7 +366,7 @@ for(date in range) {
   # Create run_matrix_long
   run_matrix_long <- pbp_ %>%
     group_by(Outs, Runners) %>%
-    summarise(RE = round(mean(TotalRunsInning - RunsonPlay), 3)) %>%
+    summarise(RE = round(mean(TotalRunsInning - Runs_upto), 3)) %>%
     mutate(Runners = factor(Runners, levels = c('000', '100', '020', '120', '003', '103', '023', '123')),
            State = paste(Outs, Runners)) %>%
     arrange(State) %>%
@@ -333,17 +377,19 @@ for(date in range) {
     mutate(State = paste(Outs, Runners),
            NewState = lead(State),
            RE = run_matrix_long$RE[match(State, run_matrix_long$State)],
-           RE_New = run_matrix_long$RE[match(NewState, run_matrix_long$State)],
            .after = Event)%>%
-    select(-Runners, -Outs) %>%
+    select(-Runners, -Outs, -Runners_end) %>%
     group_by(Date, GameID, Top.Bottom, Inning, Team) %>%
-    mutate(RE_diff = RE_New - RE + RunsonPlay)
+    mutate(RE_end =ifelse(InningPA == max(InningPA) & Result == 'Out', 0.00,  run_matrix_long$RE[match(NewState, run_matrix_long$State)]),
+           RE_diff = RE_end - RE + RunsonPlay, .after = RE) %>%
+    mutate(test = ifelse(InningPA == max(InningPA) & Result == 'Out', 0.00, RE_end - RE + RunsonPlay)) %>%
+    relocate(Result, .after = Event)
   
   weights <- pbp_2 %>%
     group_by(Result) %>%
     summarise(sum = sum(RE_diff, na.rm = TRUE),
               n = sum(RE_diff != 0, na.rm = TRUE)) %>% ######
-    filter(Result %in% c('BB', 'HBP', '1B', '2B', '3B', 'HR', 'Out')) %>%
+  filter(Result %in% c('BB', 'HBP', '1B', '2B', '3B', 'HR', 'Out')) %>%
     mutate(
       Result = factor(Result, levels = c('BB', 'HBP', '1B', '2B', '3B', 'HR', 'Out')),
       weight = sum / n,
@@ -368,6 +414,7 @@ for(date in range) {
 
   write.csv(weights, "C:/Users/tdmed/OneDrive/_Shiny/_Coop2/weights.csv", row.names = F)
   write.csv(run_matrix, "C:/Users/tdmed/OneDrive/_Shiny/_Coop2/run_matrix.csv", row.names = F)
+  write.csv(pbp_2, "C:/Users/tdmed/OneDrive/pbp_23_final.csv", row.names = F)
 
   wb <- createWorkbook()
   addWorksheet(wb, 1)
